@@ -1027,7 +1027,9 @@ async fn command_code(p: &ProviderConfig) -> Result<QuotaResult, String> {
 //      （不按字母序）；
 //   2. algorithm 串 `HMAC-SHA256`（无 AWS4 前缀）、credential scope 结尾 `request`
 //      （非 aws4_request）、签名密钥 kDate=HMAC(SK, date)（SK 不加 AWS4 前缀）。
-// 自动探测：先调 GetAFPUsage（Agent Plan），未订阅再调 GetCodingPlanUsage（Coding Plan）。
+// 自动探测：按 base_url 数据面端点定顺序（/api/coding 先 Coding，其余先 Agent），
+// 先查的未订阅/出错仍回落到另一个。不能固定先查 Agent：AK/SK 按账号发放，
+// 同一账号可同时订阅两种套餐，固定顺序会把 Coding Plan 卡片显示成 Agent 额度。
 
 const VOLC_OPENAPI_HOST: &str = "open.volcengineapi.com";
 const VOLC_API_VERSION: &str = "2024-01-01";
@@ -1328,6 +1330,76 @@ fn parse_coding_plan_tiers(result: &serde_json::Value) -> Vec<QuotaTier> {
     tiers
 }
 
+/// 两种套餐的用量查询走不同的 OpenAPI Action
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VolcPlan {
+    Afp,
+    Coding,
+}
+
+impl VolcPlan {
+    fn action(&self) -> &'static str {
+        match self {
+            VolcPlan::Afp => "GetAFPUsage",
+            VolcPlan::Coding => "GetCodingPlanUsage",
+        }
+    }
+}
+
+/// 探测顺序：base_url 的数据面端点即用户意图（/api/coding=Coding，/api/plan=Agent），
+/// 未识别的端点保持旧行为先查 Agent。返回（先查，回落）。
+fn volc_probe_order(base_url: &str) -> (VolcPlan, VolcPlan) {
+    if base_url.contains("/api/coding") {
+        (VolcPlan::Coding, VolcPlan::Afp)
+    } else {
+        (VolcPlan::Afp, VolcPlan::Coding)
+    }
+}
+
+/// 单个套餐探测结果
+enum VolcProbe {
+    Found(QuotaResult),
+    /// 签名通过但没有可解析的额度数据（多半未订阅），带原始响应片段
+    Empty(String),
+    /// 网络或接口错误
+    Failed(String),
+    /// 鉴权失败，终止：AK/SK 是账号级凭据，另一个接口也必然失败
+    Auth(String),
+}
+
+async fn volc_probe(region: &str, ak: &str, sk: &str, plan: VolcPlan) -> VolcProbe {
+    let body = match volc_openapi_call(region, ak, sk, plan.action()).await {
+        VolcCall::Auth(detail) => return VolcProbe::Auth(detail),
+        VolcCall::Other(detail) => return VolcProbe::Failed(detail),
+        VolcCall::Body(body) => body,
+    };
+    let result = body.get("Result").unwrap_or(&body);
+    let (tiers, plan_label) = match plan {
+        VolcPlan::Afp => {
+            let tiers = parse_afp_tiers(result);
+            let label = result
+                .get("PlanType")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| format!("Agent Plan {s}"));
+            (tiers, label)
+        }
+        VolcPlan::Coding => (parse_coding_plan_tiers(result), Some("Coding Plan".into())),
+    };
+    if tiers.is_empty() {
+        return VolcProbe::Empty(truncate(&body.to_string(), 400));
+    }
+    VolcProbe::Found(QuotaResult {
+        ok: true,
+        plan: plan_label,
+        tiers,
+        balance_text: None,
+        error: None,
+        ts: 0,
+    })
+}
+
 async fn volcengine(p: &ProviderConfig) -> Result<QuotaResult, String> {
     let ak = p.access_key_id.as_deref().unwrap_or("").trim();
     let sk = p.secret_access_key.as_deref().unwrap_or("").trim();
@@ -1338,55 +1410,16 @@ async fn volcengine(p: &ProviderConfig) -> Result<QuotaResult, String> {
         );
     }
     let region = volc_region(&p.base_url);
+    let (primary, fallback) = volc_probe_order(&p.base_url);
+
     let mut soft_errors: Vec<String> = Vec::new();
     let mut empty_responses: Vec<String> = Vec::new();
-
-    match volc_openapi_call(&region, ak, sk, "GetAFPUsage").await {
-        VolcCall::Auth(detail) => return Err(detail),
-        VolcCall::Other(detail) => soft_errors.push(format!("GetAFPUsage：{detail}")),
-        VolcCall::Body(body) => {
-            let result = body.get("Result").unwrap_or(&body);
-            let tiers = parse_afp_tiers(result);
-            if !tiers.is_empty() {
-                let plan = result
-                    .get("PlanType")
-                    .and_then(|v| v.as_str())
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(|s| format!("Agent Plan {s}"));
-                return Ok(QuotaResult {
-                    ok: true,
-                    plan,
-                    tiers,
-                    balance_text: None,
-                    error: None,
-                    ts: 0,
-                });
-            }
-            empty_responses.push(format!("GetAFPUsage={}", truncate(&body.to_string(), 400)));
-        }
-    }
-
-    match volc_openapi_call(&region, ak, sk, "GetCodingPlanUsage").await {
-        VolcCall::Auth(detail) => return Err(detail),
-        VolcCall::Other(detail) => soft_errors.push(format!("GetCodingPlanUsage：{detail}")),
-        VolcCall::Body(body) => {
-            let result = body.get("Result").unwrap_or(&body);
-            let tiers = parse_coding_plan_tiers(result);
-            if !tiers.is_empty() {
-                return Ok(QuotaResult {
-                    ok: true,
-                    plan: Some("Coding Plan".into()),
-                    tiers,
-                    balance_text: None,
-                    error: None,
-                    ts: 0,
-                });
-            }
-            empty_responses.push(format!(
-                "GetCodingPlanUsage={}",
-                truncate(&body.to_string(), 400)
-            ));
+    for plan in [primary, fallback] {
+        match volc_probe(&region, ak, sk, plan).await {
+            VolcProbe::Found(result) => return Ok(result),
+            VolcProbe::Auth(detail) => return Err(detail),
+            VolcProbe::Failed(detail) => soft_errors.push(format!("{}：{detail}", plan.action())),
+            VolcProbe::Empty(raw) => empty_responses.push(format!("{}={}", plan.action(), raw)),
         }
     }
 
@@ -1755,6 +1788,50 @@ mod tests {
         assert_eq!(volc_window("weekly"), Some("本周额度"));
         assert_eq!(volc_window("monthly"), Some("本月额度"));
         assert_eq!(volc_window("daily"), None);
+    }
+
+    #[test]
+    fn test_volc_probe_order() {
+        // Coding 端点先查 Coding Plan；其余（含 /api/plan、未知端点）保持旧行为先查 Agent
+        let (coding, agent) = (VolcPlan::Coding, VolcPlan::Afp);
+        assert_eq!(
+            volc_probe_order("https://ark.cn-beijing.volces.com/api/coding"),
+            (coding, agent)
+        );
+        assert_eq!(
+            volc_probe_order("https://ark.cn-beijing.volces.com/api/plan"),
+            (agent, coding)
+        );
+        assert_eq!(
+            volc_probe_order("https://example.com/whatever"),
+            (agent, coding)
+        );
+    }
+
+    /// 2026-11 真实接口返回结构（GetCodingPlanUsage），锁住解析器字段
+    #[test]
+    fn test_volc_coding_plan_parse_real_shape() {
+        let result = serde_json::json!({
+            "Status": "Running",
+            "UpdateTimestamp": 1793688128,
+            "QuotaUsage": [
+                { "Level": "session", "Percent": 2.513238, "ResetTimestamp": 1793705487,
+                  "Cap": 100, "RewardTotalPercent": 0 },
+                { "Level": "weekly", "Percent": 0.3350984, "ResetTimestamp": 1794153600,
+                  "Cap": 100, "RewardTotalPercent": 0 },
+                { "Level": "monthly", "Percent": 0.1675492, "ResetTimestamp": 1796313599,
+                  "Cap": 100, "RewardTotalPercent": 0 }
+            ],
+            "HasReward": false
+        });
+        let tiers = parse_coding_plan_tiers(&result);
+        assert_eq!(tiers.len(), 3);
+        assert_eq!(tiers[0].name, "五小时窗口");
+        assert!((tiers[0].utilization - 2.513238).abs() < 1e-9);
+        assert_eq!(tiers[1].name, "本周额度");
+        assert_eq!(tiers[2].name, "本月额度");
+        // 秒级 ResetTimestamp 归一到秒
+        assert_eq!(tiers[0].resets_at_ts, Some(1793705487));
     }
 
     #[test]
