@@ -78,7 +78,10 @@ pub fn detect_kind(base_url: &str) -> Option<Kind> {
         Some(Kind::MiniMaxCn)
     } else if u.contains("api.minimax.io") {
         Some(Kind::MiniMaxEn)
-    } else if u.contains("opencode.ai/zen/go") {
+    } else if u.contains("opencode.ai/zen/go") || u.contains("opencode.ai/inference/go") {
+        // 覆盖旧入口 /zen/go（、/v1）与现行文档地址 /inference/go（、/v1、
+        // /anthropic，cc-switch #8720）；Zen 按量版（/zen/v1 或 /inference/v1）
+        // 没有任何用量 API（实测 404），刻意不命中
         Some(Kind::OpencodeGo)
     } else if u.contains("api.commandcode.ai/provider") {
         Some(Kind::CommandCode)
@@ -648,7 +651,23 @@ async fn minimax(p: &ProviderConfig, is_cn: bool) -> Result<QuotaResult, String>
                 .find(|i| i.get("model_name").and_then(|v| v.as_str()) == Some("general"))
         })
         .ok_or_else(|| "响应中没有 general 模型的额度数据".to_string())?;
+    let tiers = parse_minimax_tiers(item)?;
+    Ok(QuotaResult {
+        ok: true,
+        plan: None,
+        tiers,
+        balance_text: None,
+        error: None,
+        ts: 0,
+    })
+}
 
+/// 由 `model_remains` 的 general 条目解析档位，剩余百分比反转为已用百分比。
+/// 5h 桶始终存在；周桶按 `current_weekly_status` 区分（移植自 cc-switch #8124）：
+/// 1 = 正常计时；2 = 周额度已耗尽（剩余 0%，官方控制台仍显示红条并按周限额限流），
+/// 照常展示，否则周桶耗尽后从卡片消失、5h 窗口刚重置时读起来正好相反；3 = 无周
+/// 限额（remaining_percent 恒为 100），跳过。
+fn parse_minimax_tiers(item: &serde_json::Value) -> Result<Vec<QuotaTier>, String> {
     let mut tiers = Vec::new();
     if let Some(remain) = item
         .get("current_interval_remaining_percent")
@@ -662,8 +681,8 @@ async fn minimax(p: &ProviderConfig, is_cn: bool) -> Result<QuotaResult, String>
             amount: None,
         });
     }
-    // 仅当 status=1 时有周限额；status=3 等表示该套餐无周限额
-    if item.get("current_weekly_status").and_then(|v| v.as_i64()) == Some(1) {
+    let weekly_status = item.get("current_weekly_status").and_then(|v| v.as_i64());
+    if weekly_status == Some(1) || weekly_status == Some(2) {
         if let Some(remain) = item
             .get("current_weekly_remaining_percent")
             .and_then(|v| v.as_f64())
@@ -680,14 +699,7 @@ async fn minimax(p: &ProviderConfig, is_cn: bool) -> Result<QuotaResult, String>
     if tiers.is_empty() {
         return Err("响应中没有额度数据".into());
     }
-    Ok(QuotaResult {
-        ok: true,
-        plan: None,
-        tiers,
-        balance_text: None,
-        error: None,
-        ts: 0,
-    })
+    Ok(tiers)
 }
 
 // ── ZenMux ──────────────────────────────────────────────────
@@ -775,6 +787,9 @@ async fn zenmux(p: &ProviderConfig) -> Result<QuotaResult, String> {
 
 // ── OpenCode Go ─────────────────────────────────────────────
 // GET https://opencode.ai/zen/go/v1/usage（Bearer）
+// base_url 新旧两档入口都识别（cc-switch #8720）：/zen/go（旧入口，推理侧只认
+// x-api-key）与 /inference/go/anthropic（现行文档地址，两种鉴权都收）。用量端点
+// 不分入口，固定走 /zen/go/v1/usage，只认 Bearer——与推理侧正好相反，不能互换。
 // usage.{rolling|weekly|monthly}：{status, percent(0-100 已用), resetsAt}
 
 async fn opencode_go(p: &ProviderConfig) -> Result<QuotaResult, String> {
@@ -1683,6 +1698,22 @@ mod tests {
         );
         assert_eq!(detect_kind("https://opencode.ai/zen/go"), Some(OpencodeGo));
         assert_eq!(
+            detect_kind("https://opencode.ai/zen/go/v1"),
+            Some(OpencodeGo)
+        );
+        // 现行文档地址（cc-switch #8720）
+        assert_eq!(
+            detect_kind("https://opencode.ai/inference/go/anthropic"),
+            Some(OpencodeGo)
+        );
+        assert_eq!(
+            detect_kind("https://opencode.ai/inference/go/v1"),
+            Some(OpencodeGo)
+        );
+        // Zen 按量版没有任何用量 API，不得命中
+        assert_eq!(detect_kind("https://opencode.ai/zen/v1"), None);
+        assert_eq!(detect_kind("https://opencode.ai/inference/v1"), None);
+        assert_eq!(
             detect_kind("https://ark.cn-beijing.volces.com/api/plan/v3"),
             Some(Volcengine)
         );
@@ -1832,6 +1863,52 @@ mod tests {
         assert_eq!(tiers[2].name, "本月额度");
         // 秒级 ResetTimestamp 归一到秒
         assert_eq!(tiers[0].resets_at_ts, Some(1793705487));
+    }
+
+    #[test]
+    fn test_minimax_weekly_status() {
+        // status=1 正常计时：两档都在，剩余百分比反转为已用
+        let item = serde_json::json!({
+            "model_name": "general",
+            "current_interval_remaining_percent": 80.0, "end_time": 1759000000i64,
+            "current_weekly_status": 1,
+            "current_weekly_remaining_percent": 55.0, "weekly_end_time": 1759500000i64,
+        });
+        let tiers = parse_minimax_tiers(&item).unwrap();
+        assert_eq!(tiers.len(), 2);
+        assert_eq!(tiers[0].name, "五小时窗口");
+        assert!((tiers[0].utilization - 20.0).abs() < 1e-9);
+        assert_eq!(tiers[0].resets_at_ts, Some(1759000000));
+        assert_eq!(tiers[1].name, "本周额度");
+        assert!((tiers[1].utilization - 45.0).abs() < 1e-9);
+
+        // status=2：周额度已耗尽（remaining 0，官方控制台仍显示红条并限流），
+        // 周桶照常展示成已用完，不能消失——否则 5h 窗口刚重置时卡片读「剩余
+        // 100%」而实际不可用，语义正好相反（cc-switch #8124 实测）
+        let item = serde_json::json!({
+            "model_name": "general",
+            "current_interval_remaining_percent": 100.0,
+            "current_weekly_status": 2,
+            "current_weekly_remaining_percent": 0.0, "weekly_end_time": 1759500000i64,
+        });
+        let tiers = parse_minimax_tiers(&item).unwrap();
+        assert_eq!(tiers.len(), 2);
+        assert_eq!(tiers[1].name, "本周额度");
+        assert!((tiers[1].utilization - 100.0).abs() < 1e-9);
+
+        // status=3：无周限额，remaining 恒 100，跳过
+        let item = serde_json::json!({
+            "model_name": "general",
+            "current_interval_remaining_percent": 70.0,
+            "current_weekly_status": 3,
+            "current_weekly_remaining_percent": 100.0,
+        });
+        let tiers = parse_minimax_tiers(&item).unwrap();
+        assert_eq!(tiers.len(), 1);
+        assert_eq!(tiers[0].name, "五小时窗口");
+
+        // 字段全缺：报错而非空档位
+        assert!(parse_minimax_tiers(&serde_json::json!({ "model_name": "general" })).is_err());
     }
 
     #[test]
