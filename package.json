@@ -1,7 +1,7 @@
 {
   "name": "quotaspark",
   "private": true,
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "定时点燃 Coding Plan 的五小时额度窗口",
   "type": "module",
   "scripts": {
