@@ -11,6 +11,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use store::Config;
 use tauri::Manager;
+// 仅 release 的自启默认开启/路径自愈用到（debug 下相关代码整体 cfg 掉）
+#[cfg(not(debug_assertions))]
 use tauri_plugin_autostart::ManagerExt;
 
 fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
@@ -95,7 +97,9 @@ pub fn run() {
 
             // 开机自启默认开启：标记缺失（旧配置/全新安装）时补开并写标记，
             // 之后以顶栏开关为准，用户手动关闭不会再被拉起。enable 失败不写
-            // 标记，下次启动重试。
+            // 标记，下次启动重试。debug 构建（dev/e2e）一律不碰：注册的会是
+            // target/debug 下的 exe，开机拉起弹黑框且白屏。
+            #[cfg(not(debug_assertions))]
             {
                 let state = handle.state::<AppState>();
                 let mut st = state.0.lock().unwrap();
@@ -126,6 +130,20 @@ pub fn run() {
                                 detail: format!("默认开启开机自启失败: {e}"),
                             });
                         }
+                    }
+                }
+            }
+
+            // 自启路径自愈（仅 release）：注册表里的路径可能指向旧位置——
+            // 旧版本误注册的 target/debug、安装目录迁移等。只要自启处于开启
+            // 状态，就用当前 exe 路径重写一次（enable 幂等，无副作用）；
+            // 已关闭则不动，尊重用户选择。
+            #[cfg(not(debug_assertions))]
+            {
+                let auto = handle.autolaunch();
+                if auto.is_enabled().unwrap_or(false) {
+                    if let Err(e) = auto.enable() {
+                        eprintln!("校正开机自启路径失败: {e}");
                     }
                 }
             }

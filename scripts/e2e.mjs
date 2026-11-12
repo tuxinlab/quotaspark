@@ -378,18 +378,19 @@ await step("【额度刷新】↻ 刷新按钮可用且查询时间更新", asyn
 
 /* ── 5. 设置 ─────────────────────────────────────────────── */
 
-await step("【自启】顶栏开关 → 状态往返（恢复原状）", async () => {
+await step("【自启】dev 下点击开关 → 拒绝写入并提示（防止 debug 路径注册进系统）", async () => {
   const btn = page.getByTestId("autostart-btn");
   const before = (await btn.innerText()).includes("✓");
   await btn.click();
   await pollUntil(
-    async () => ({ ok: (await btn.innerText()).includes("✓") !== before, value: "toggled" }),
-    "自启状态未变化",
-  );
-  await btn.click();
-  await pollUntil(
-    async () => ({ ok: (await btn.innerText()).includes("✓") === before, value: "restored" }),
-    "自启状态未恢复",
+    async () => {
+      const notice = await page.getByTestId("notice").innerText();
+      const unchanged = (await btn.innerText()).includes("✓") === before;
+      // dev/debug 构建下 set_autostart 必须拒绝写入（注册 debug 路径会导致
+      // 开机黑框 + 白屏），UI 提示失败且按钮状态不变
+      return { ok: unchanged && /失败|开发/.test(notice), value: notice.slice(0, 60) };
+    },
+    "dev 下自启开关应拒绝修改并提示失败",
   );
 });
 

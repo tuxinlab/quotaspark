@@ -347,11 +347,23 @@ pub fn get_autostart(app: AppHandle) -> bool {
 
 #[tauri::command]
 pub fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
-    let auto = app.autolaunch();
-    if enabled {
-        auto.enable().map_err(|e| e.to_string())
-    } else {
-        auto.disable().map_err(|e| e.to_string())
+    // debug 构建（npm run tauri dev / e2e）注册的会是 target/debug 下的 exe：
+    // 开机拉起时带控制台黑框，且内嵌的是 Vite dev 地址（没有 dev 服务器时
+    // 白屏报连接被拒）。e2e 会真实点击这个开关，必须在 dev 里挡掉写入，
+    // 自启只在安装版（release）里允许开关。
+    #[cfg(debug_assertions)]
+    {
+        let _ = (app, enabled);
+        Err("开发调试模式不修改开机自启（避免把 debug 版路径注册进系统）".into())
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let auto = app.autolaunch();
+        if enabled {
+            auto.enable().map_err(|e| e.to_string())
+        } else {
+            auto.disable().map_err(|e| e.to_string())
+        }
     }
 }
 
