@@ -35,7 +35,7 @@ npm run tauri build
   "platforms": {
     "windows-x86_64": {
       "signature": "（.sig 文件的内容）",
-      "url": "https://github.com/tuxin-labs/quotaspark/releases/download/v0.2.0/QuotaSpark_0.2.0_x64-setup.exe"
+      "url": "https://github.com/tuxinlab/quotaspark/releases/download/v0.2.0/QuotaSpark_0.2.0_x64-setup.exe"
     }
   }
 }
@@ -57,5 +57,23 @@ git add -A && git commit -m "release: v0.2.0" && git push
 必须选 Latest——更新器端点是 `releases/latest/download/latest.json`，
 选 None 会让所有用户收不到新版本。
 
-用户端：启动时自动检查（有新版顶栏按钮变「下载并安装」并提示），或手动点
-「检查更新」→ 下载安装 → 重启生效。
+## 6. 用户端的更新流程
+
+应用启动时静默检查一次，之后每 6 小时复查一次，顶栏按钮也可手动检查。发现新版本
+只把按钮变成「下载并安装 vX」并提示一次，不会自动安装。
+
+用户点「下载并安装」后：下载安装包，用 `tauri.conf.json` 里的公钥验签，启动 NSIS
+安装器，应用随即退出；安装器关闭残留进程、覆盖安装，并自动重新打开新版本。
+没有单独的「重启」步骤。
+
+维护者需要知道的几点：
+
+- 签名里记录了被签安装包的版本号（本项目 0.1.0 起的签名都带），更新器会校验它与
+  `latest.json` 宣告的 `version` 一致，不一致就拒绝安装。所以 `latest.json` 的
+  `version` 必须和上传的安装包是同一个版本，不能只改数字；打包也请始终用
+  `npm run tauri build`，不要用别的工具代签。
+- 参与比较的「当前版本」取自 `tauri.conf.json` 的 `version`，发版时它必须和
+  `latest.json` 的 `version` 一起改。
+- 更新端点在 `src-tauri/tauri.conf.json` 的 `plugins.updater.endpoints`，仓库归属是
+  `tuxinlab`。旧组织名 `tuxin-labs` 目前靠 GitHub 的 301 重定向还能访问，但不要再
+  写回旧名字；0.1.7 及更早的版本编译进去的是旧名字，只能靠这个重定向。

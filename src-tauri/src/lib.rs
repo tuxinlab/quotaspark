@@ -70,8 +70,9 @@ pub fn run() {
                 let _ = w.set_focus();
             }
         }))
+        // 更新器：下载、验签、启动安装器都由插件完成，安装后由安装器重新打开应用，
+        // 所以这里不注册重启插件（旧版用它做的「重启完成更新」在 Windows 上走不到）
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             // 注册自启时附带 --minimized：开机拉起后静默进托盘，不弹主窗口
