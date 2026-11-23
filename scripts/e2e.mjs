@@ -120,11 +120,45 @@ await step("【同步】同步 cc-switch 配置 → 成功提示 + sync 日志",
     throw new Error("日志缺 sync 记录");
 });
 
-await step("【支持性】不支持的供应商（Xiaomi MiMo）不显示查额度按钮", async () => {
+await step("【支持性】小米 MiMo（Token Plan）支持查额度，出现查询入口", async () => {
+  // cc-switch v4.0.36 起支持 MiMo：token-plan-cn 域名 + tp- Key 走套餐积分查询
   const mimo = page.locator('[data-testid="provider-card"][data-name="Xiaomi MiMo"]');
   if (!(await mimo.count())) throw new Error("找不到 Xiaomi MiMo 卡片（同步后应有）");
-  await mimo.locator(".quota-unsupported").waitFor({ timeout: 3000 });
-  if (await mimo.getByTestId("quota-btn").count()) throw new Error("不应出现查额度按钮");
+  await pollUntil(
+    async () => ({
+      ok:
+        (await mimo.locator(".quota-unsupported").count()) === 0 &&
+        ((await mimo.getByTestId("quota-btn").count()) > 0 ||
+          (await mimo.getByTestId("quota-refresh").count()) > 0),
+      value: "mimo-supported",
+    }),
+    "MiMo 卡片仍显示「不支持自动查额度」或没有查询入口",
+    5000,
+  );
+});
+
+await step("【查额度·MiMo】真实查询路由到 Token Plan 接口（成功或业务错误均可）", async () => {
+  // 只验证识别与路由：不接受「不支持自动查额度」，其余成功档位 / 明确业务错误都算通过
+  const mimo = page.locator('[data-testid="provider-card"][data-name="Xiaomi MiMo"]');
+  await triggerQuota(mimo);
+  await pollUntil(
+    async () => {
+      const unsupported = await mimo.locator(".quota-unsupported").count();
+      const panel = await mimo.locator(".quota").innerText();
+      return {
+        ok:
+          unsupported === 0 &&
+          ((await mimo.locator(".tier").count()) > 0 ||
+            (await mimo.locator(".quota-err").count()) > 0),
+        value: panel.slice(0, 120),
+      };
+    },
+    "MiMo 查询 15 秒内没有产生任何结果（档位或错误）",
+    20000,
+  );
+  const text = await mimo.locator(".quota").innerText();
+  if (text.includes("不支持自动查额度")) throw new Error(`识别失败：${text.slice(0, 120)}`);
+  await page.screenshot({ path: `${SHOT_DIR}/11-mimo-quota.png` });
 });
 
 /* ── 2. 供应商增改查 + 高级配置 ──────────────────────────── */

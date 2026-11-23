@@ -16,7 +16,7 @@
 | GitHub 账号 | 提 Issue / PR 用 |
 
 ```bash
-git clone https://github.com/tuxin-labs/quotaspark.git
+git clone https://github.com/tuxinlab/quotaspark.git
 cd quotaspark
 npm install
 npm run tauri dev     # 跑起来看看
@@ -77,7 +77,7 @@ src/                  # React 前端（App.tsx 顶栏与卡片，ProviderForm �
 src-tauri/src/
   commands.rs         # Tauri 命令层（前端 invoke 的入口，保持薄）
   engine.rs           # 激活引擎（最小请求点燃窗口）
-  quota.rs            # 12 家供应商的额度/余额查询
+  quota.rs            # 14 家供应商的额度/余额查询
   scheduler.rs        # 定时调度（30s tick + 去重）
   cc_sync.rs          # cc-switch 数据库只读同步
   store.rs / state.rs # 配置持久化与全局状态
@@ -87,5 +87,5 @@ docs/RELEASING.md     # 维护者发版流程
 
 ## 报告问题
 
-Bug 请用 [Issue 模板](https://github.com/tuxin-labs/quotaspark/issues/new?template=bug_report.yml) 提交，
+Bug 请用 [Issue 模板](https://github.com/tuxinlab/quotaspark/issues/new?template=bug_report.yml) 提交，
 尽量附上 `~/.cc-activator/logs/activator.log` 中的相关片段（**注意先抹掉其中的 API Key 等敏感信息**）。

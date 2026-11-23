@@ -29,8 +29,21 @@ const BLANK: ProviderConfig = {
 /** 与 src-tauri/src/quota.rs detect_kind 的支持名单保持一致 */
 export const QUOTA_SUPPORTED_HINT =
   "支持自动查额度：Kimi For Coding、智谱 GLM（个人版/团队版）、MiniMax、" +
-  "OpenCode Go、Command Code、火山方舟 Agent/Coding Plan、ZenMux；按量余额类：DeepSeek、" +
-  "StepFun、SiliconFlow、OpenRouter、Novita AI。其余域名暂不支持，激活不受影响。";
+  "OpenCode Go、Command Code、小米 MiMo Token Plan、火山方舟 Agent/Coding Plan、ZenMux；" +
+  "按量余额类：DeepSeek、StepFun、SiliconFlow、OpenRouter、Novita AI、小米 MiMo。" +
+  "按 Base URL 的域名识别，其余域名暂不支持，激活不受影响。";
+
+/** 与后端 quota.rs 的识别规则同效：主机名是该域名或它的子域（按标签边界），
+ *  后面再跟路径前缀。中转站把官方域名写在路径里、仿冒域名都不算，
+ *  否则表单显示了输入框、卡片却提示不支持查额度。 */
+const hostPattern = (host: string, path = "") =>
+  new RegExp(
+    String.raw`^\s*(?:[a-z][a-z\d+.-]*://)?(?:[^/?#@]*@)?(?:[\w-]+\.)*${host}\.?(?::\d+)?` +
+      (path || String.raw`(?=[/?#]|\s*$)`),
+    "i",
+  );
+const VOLCENGINE_URL = hostPattern(String.raw`volces\.com`, String.raw`/api/(?:plan|coding)`);
+const ZENMUX_URL = hostPattern(String.raw`zenmux\.ai`);
 
 export default function ProviderForm({ initial, onClose, onSaved }: Props) {
   const [p, setP] = useState<ProviderConfig>(initial ?? BLANK);
@@ -108,7 +121,7 @@ export default function ProviderForm({ initial, onClose, onSaved }: Props) {
           <p className="adv-hint">{QUOTA_SUPPORTED_HINT}</p>
           <p className="adv-hint">
             火山方舟 AK/SK、ZenMux 用量端点的输入框，会在上方 Base URL
-            填入对应地址（volces.com/api/plan、/api/coding 或含 zenmux）后自动出现；
+            填入对应域名下的地址（火山的 volces.com/api/plan、/api/coding，或 zenmux.ai）后自动出现；
             智谱团队版勾选后填写组织/项目 ID；其余供应商查额度直接用上方 API Key，无需额外配置。
           </p>
           <label className="check">
@@ -140,7 +153,7 @@ export default function ProviderForm({ initial, onClose, onSaved }: Props) {
               </label>
             </>
           )}
-          {/volces\.com\/api\/(plan|coding)/i.test(p.base_url) && (
+          {VOLCENGINE_URL.test(p.base_url) && (
             <>
               <label>
                 火山方舟 AccessKey ID
@@ -160,7 +173,7 @@ export default function ProviderForm({ initial, onClose, onSaved }: Props) {
               </label>
             </>
           )}
-          {/zenmux/i.test(p.base_url) && (
+          {ZENMUX_URL.test(p.base_url) && (
             <label>
               ZenMux 用量端点 URL
               <input

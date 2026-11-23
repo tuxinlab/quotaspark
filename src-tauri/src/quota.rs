@@ -3,9 +3,14 @@
 //! 按 base_url 自动检测：
 //! - Coding Plan（窗口百分比）：Kimi For Coding、智谱 GLM 个人版（bigmodel.cn /
 //!   api.z.ai）、智谱团队版（需显式指定 + 组织/项目 ID）、MiniMax（中/英）、
-//!   ZenMux（需填用量端点 URL）、OpenCode Go、Command Code、
+//!   ZenMux（需填用量端点 URL）、OpenCode Go、Command Code、小米 MiMo Token Plan、
 //!   火山方舟 Agent/Coding Plan（需账号 AK/SK）
-//! - 按量余额：DeepSeek、StepFun、SiliconFlow（中/英）、OpenRouter、Novita AI
+//! - 按量余额：DeepSeek、StepFun、SiliconFlow（中/英）、OpenRouter、Novita AI、
+//!   小米 MiMo
+//!
+//! 供应商按 base_url 的主机名识别，域名按边界匹配、必要时再看路径前缀（移植自
+//! cc-switch #9648）：中转站把官方域名写在路径里、或仿冒域名（如
+//! api.x.ai.example.com）都不算官方供应商，否则会拿中转站的 Key 去打官方额度接口。
 //!
 //! 智谱个人版账户没有 Coding Plan（按量付费）时查套餐会回业务错误，此时改查
 //! 账户余额展示；团队版不回落（余额接口不认组织/项目头）。
@@ -65,44 +70,111 @@ pub enum Kind {
     SiliconFlowEn,
     OpenRouter,
     Novita,
+    /// 小米 MiMo Token Plan（`token-plan-cn.xiaomimimo.com`，`tp-` Key）
+    MimoTokenPlan,
+    /// 小米 MiMo 按量付费（`api.xiaomimimo.com`，`sk-` Key）
+    Mimo,
+}
+
+/// 剥掉合法的 scheme（字母开头，仅含字母数字与 `+` `-` `.`），其余原样返回。
+/// query 里带 `https://` 的无 scheme 地址不会被误剥。
+fn url_after_scheme(url: &str) -> &str {
+    match url.split_once("://") {
+        Some((scheme, rest))
+            if scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+                && scheme
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')) =>
+        {
+            rest
+        }
+        _ => url,
+    }
+}
+
+/// 取 URL 的主机名：小写，去掉 userinfo、端口与末尾的点；IPv6 取方括号里的部分。
+fn url_host(url: &str) -> String {
+    let rest = url_after_scheme(url.trim());
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    // userinfo 里也可能带 @，只认最后一个 @ 之后的主机部分，
+    // 否则 `https://api.deepseek.com@relay.example.com` 会被当成 DeepSeek
+    let host_port = authority.rsplit('@').next().unwrap_or(authority);
+    let host = if let Some(ipv6) = host_port.strip_prefix('[') {
+        ipv6.split(']').next().unwrap_or(ipv6)
+    } else {
+        host_port.split(':').next().unwrap_or(host_port)
+    };
+    host.trim_end_matches('.').to_ascii_lowercase()
+}
+
+/// 主机名等于该域名或是它的子域名。按标签边界比较：`notbigmodel.cn`、
+/// `bigmodel.cn.example.com` 都不算。
+fn host_is(url: &str, hosts: &[&str]) -> bool {
+    let host = url_host(url);
+    if host.is_empty() {
+        return false;
+    }
+    hosts.iter().any(|candidate| {
+        let candidate = candidate.trim_start_matches('.').to_ascii_lowercase();
+        host == candidate || host.ends_with(&format!(".{candidate}"))
+    })
+}
+
+/// URL 的路径部分（小写，不含 query 与 fragment）。
+fn url_path(base_url: &str) -> String {
+    let rest = url_after_scheme(base_url.trim());
+    let path = rest.find(['/', '?', '#']).map_or("", |i| &rest[i..]);
+    path.split(['?', '#'])
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase()
 }
 
 pub fn detect_kind(base_url: &str) -> Option<Kind> {
-    let u = base_url.to_lowercase();
-    // Coding Plan 优先
-    if u.contains("api.kimi.com/coding") {
+    let path = url_path(base_url);
+    let path_starts = |prefixes: &[&str]| prefixes.iter().any(|p| path.starts_with(p));
+    // 套餐类优先
+    if host_is(base_url, &["api.kimi.com"]) && path_starts(&["/coding"]) {
         Some(Kind::Kimi)
-    } else if u.contains("bigmodel.cn") || u.contains("api.z.ai") {
+    } else if host_is(base_url, &["bigmodel.cn", "api.z.ai"]) {
         Some(Kind::Zhipu)
-    } else if u.contains("api.minimaxi.com") || u.contains("api.minimax.cn") {
+    } else if host_is(base_url, &["api.minimaxi.com", "api.minimax.cn"]) {
         Some(Kind::MiniMaxCn)
-    } else if u.contains("api.minimax.io") {
+    } else if host_is(base_url, &["api.minimax.io"]) {
         Some(Kind::MiniMaxEn)
-    } else if u.contains("opencode.ai/zen/go") || u.contains("opencode.ai/inference/go") {
+    } else if host_is(base_url, &["zenmux.ai"]) {
+        Some(Kind::ZenMux)
+    } else if host_is(base_url, &["opencode.ai"]) && path_starts(&["/zen/go", "/inference/go"]) {
         // 覆盖旧入口 /zen/go（、/v1）与现行文档地址 /inference/go（、/v1、
         // /anthropic，cc-switch #8720）；Zen 按量版（/zen/v1 或 /inference/v1）
         // 没有任何用量 API（实测 404），刻意不命中
         Some(Kind::OpencodeGo)
-    } else if u.contains("api.commandcode.ai/provider") {
+    } else if host_is(base_url, &["api.commandcode.ai"])
+        && (path == "/provider" || path.starts_with("/provider/"))
+    {
+        // 只有 /provider（Claude）与 /provider/v1（Codex）两个入口，
+        // /providers、/provider-v2 之类不算（cc-switch #9518）
         Some(Kind::CommandCode)
-    } else if u.contains("volces.com/api/plan") || u.contains("volces.com/api/coding") {
+    } else if host_is(base_url, &["volces.com"]) && path_starts(&["/api/plan", "/api/coding"]) {
         Some(Kind::Volcengine)
-    } else if u.contains("zenmux") {
-        Some(Kind::ZenMux)
+    } else if host_is(base_url, &["token-plan-cn.xiaomimimo.com"]) {
+        Some(Kind::MimoTokenPlan)
     }
     // 按量余额
-    else if u.contains("api.deepseek.com") {
+    else if host_is(base_url, &["api.deepseek.com"]) {
         Some(Kind::DeepSeek)
-    } else if u.contains("api.stepfun.ai") || u.contains("api.stepfun.com") {
+    } else if host_is(base_url, &["api.stepfun.ai", "api.stepfun.com"]) {
         Some(Kind::StepFun)
-    } else if u.contains("api.siliconflow.cn") {
+    } else if host_is(base_url, &["api.siliconflow.cn"]) {
         Some(Kind::SiliconFlowCn)
-    } else if u.contains("api.siliconflow.com") {
+    } else if host_is(base_url, &["api.siliconflow.com"]) {
         Some(Kind::SiliconFlowEn)
-    } else if u.contains("openrouter.ai") {
+    } else if host_is(base_url, &["openrouter.ai"]) {
         Some(Kind::OpenRouter)
-    } else if u.contains("api.novita.ai") {
+    } else if host_is(base_url, &["api.novita.ai"]) {
         Some(Kind::Novita)
+    } else if host_is(base_url, &["api.xiaomimimo.com"]) {
+        Some(Kind::Mimo)
     } else {
         None
     }
@@ -122,6 +194,8 @@ pub fn detect_label(kind: Kind) -> &'static str {
         Kind::SiliconFlowCn | Kind::SiliconFlowEn => "SiliconFlow（按量）",
         Kind::OpenRouter => "OpenRouter（按量）",
         Kind::Novita => "Novita AI（按量）",
+        Kind::MimoTokenPlan => "小米 MiMo Token Plan",
+        Kind::Mimo => "小米 MiMo（按量）",
     }
 }
 
@@ -163,6 +237,7 @@ async fn dispatch(p: &ProviderConfig) -> Result<QuotaResult, String> {
         Kind::ZenMux => zenmux(p).await,
         Kind::OpencodeGo => opencode_go(p).await,
         Kind::CommandCode => command_code(p).await,
+        Kind::MimoTokenPlan => mimo_token_plan(p).await,
         Kind::Volcengine => volcengine(p).await,
         Kind::DeepSeek => deepseek(p).await,
         Kind::StepFun => stepfun(p).await,
@@ -170,6 +245,7 @@ async fn dispatch(p: &ProviderConfig) -> Result<QuotaResult, String> {
         Kind::SiliconFlowEn => siliconflow(p, false).await,
         Kind::OpenRouter => openrouter(p).await,
         Kind::Novita => novita(p).await,
+        Kind::Mimo => mimo_balance(p).await,
     }
 }
 
@@ -1033,6 +1109,122 @@ async fn command_code(p: &ProviderConfig) -> Result<QuotaResult, String> {
     parse_command_code_quota(&credits, Some(&subscription), &summary)
 }
 
+// ── 小米 MiMo Token Plan ────────────────────────────────────
+// GET https://token-plan-cn.xiaomimimo.com/v1/platform/token_plan（Bearer，tp- Key）
+// 官方文档：mimo.mi.com/docs/zh-CN/api/asset/credits-get。quota.total_credits（本期
+// 总额，含补偿积分）/ used_credits / remaining_credits 折成一档用量百分比，本期截止
+// period.end_at 作重置时间。套餐有月付也有年付，周期长短不固定，所以叫「本期额度」，
+// 不冒充「每月」。按量付费的 api.xiaomimimo.com 是另一套 sk- Key，走余额查询。
+// （移植自 cc-switch #9404）
+
+/// MiMo 的周期时间是「UTC，`YYYY-MM-DD HH:mm:ss`」（无 T、无时区），按 UTC 解析；
+/// 不是这种写法时交给通用解析（ISO 8601 / 时间戳）。
+fn mimo_period_reset(value: &serde_json::Value) -> (Option<String>, Option<i64>) {
+    if let Some(text) = value.as_str() {
+        if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(text.trim(), "%Y-%m-%d %H:%M:%S") {
+            let secs = norm_ts(naive.and_utc().timestamp());
+            return (secs.and_then(ts_to_local), secs);
+        }
+    }
+    (reset_display(value), reset_ts(value))
+}
+
+/// 解析 token_plan 响应为（档位, 套餐代码）。total 非正数、used / remaining 都没有、
+/// 或带 error 字段时报错，不静默显示成 0%。
+fn parse_mimo_token_plan(
+    body: &serde_json::Value,
+) -> Result<(Vec<QuotaTier>, Option<String>), String> {
+    if let Some(err) = body.get("error").filter(|e| !e.is_null()) {
+        let message = err
+            .get("message")
+            .and_then(|v| v.as_str())
+            .or_else(|| err.as_str())
+            .unwrap_or("未知");
+        return Err(format!("接口错误：{}", truncate(message, 200)));
+    }
+    let quota = body
+        .get("quota")
+        .ok_or_else(|| "该账号没有 Token Plan 积分额度（响应缺少 quota）".to_string())?;
+    let total = quota
+        .get("total_credits")
+        .and_then(num)
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .ok_or_else(|| {
+            "该账号没有 Token Plan 积分额度（total_credits 缺失或不为正）".to_string()
+        })?;
+    let used = quota
+        .get("used_credits")
+        .and_then(num)
+        .or_else(|| {
+            quota
+                .get("remaining_credits")
+                .and_then(num)
+                .map(|remaining| total - remaining)
+        })
+        .filter(|v| v.is_finite())
+        .ok_or_else(|| "响应缺少或含非法的 used_credits / remaining_credits".to_string())?;
+    let (resets_at, resets_at_ts) = mimo_period_reset(
+        body.get("period")
+            .and_then(|period| period.get("end_at"))
+            .unwrap_or(&serde_json::Value::Null),
+    );
+    let plan = body
+        .get("plan_code")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    Ok((
+        vec![QuotaTier {
+            name: "本期额度".into(),
+            // 超用封顶 100%
+            utilization: (used / total * 100.0).clamp(0.0, 100.0),
+            resets_at,
+            resets_at_ts,
+            amount: None,
+        }],
+        plan,
+    ))
+}
+
+async fn mimo_token_plan(p: &ProviderConfig) -> Result<QuotaResult, String> {
+    let key = require_key(p)?;
+    let (status, text) = http_get(
+        "https://token-plan-cn.xiaomimimo.com/v1/platform/token_plan",
+        &[
+            ("Authorization", format!("Bearer {key}")),
+            ("Accept", "application/json".into()),
+        ],
+    )
+    .await?;
+    // 401：Key 无效，或把按量付费的 sk- Key 用在了 Token Plan 上
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(
+            "Key 无效（HTTP 401）：Token Plan 要用 tp- 开头的 Key，sk- 开头的是按量付费的 Key"
+                .into(),
+        );
+    }
+    // 403：地区不支持或 Key 被风控，官方建议换一个新 Key
+    if status == reqwest::StatusCode::FORBIDDEN {
+        return Err(
+            "Key 被拒绝（HTTP 403）：所在地区不支持，或 Key 被风控，建议换一个新 Key".into(),
+        );
+    }
+    if !status.is_success() {
+        return Err(format!("HTTP {status}：{}", truncate(&text, 200)));
+    }
+    let body = parse_json(&text)?;
+    let (tiers, plan) = parse_mimo_token_plan(&body)?;
+    Ok(QuotaResult {
+        ok: true,
+        plan,
+        tiers,
+        balance_text: None,
+        error: None,
+        ts: 0,
+    })
+}
+
 // ── 火山方舟 Agent Plan / Coding Plan ───────────────────────
 //
 // 控制面 OpenAPI（open.volcengineapi.com），强制火山签名 V4（AK/SK）——
@@ -1675,6 +1867,67 @@ fn parse_novita_balance(body: &serde_json::Value) -> Result<String, String> {
     Ok(format!("Novita AI 余额：{available:.2} USD"))
 }
 
+// ── 小米 MiMo 按量余额 ──────────────────────────────────────
+// GET https://api.xiaomimimo.com/v1/platform/balance（Bearer，sk- Key）
+// 官方文档：mimo.mi.com/docs/zh-CN/api/asset/balance-get。Response:
+// { object, is_available, balance_infos: [{ currency, cash_balance, gift_balance,
+//   frozen_balance, credit_limit, credit_available, total_available }] }，金额都是
+// 两位小数的字符串。
+// 可用余额按文档里 is_available 的口径算：total_available（现金 + 赠金 + 可用授信，
+// 已加回冻结部分）减去 frozen_balance。和 DeepSeek 一样不拿 is_available 判 Key 失效，
+// 余额用完照常显示。（移植自 cc-switch #9404）
+
+async fn mimo_balance(p: &ProviderConfig) -> Result<QuotaResult, String> {
+    let key = require_key(p)?;
+    let (status, text) = http_get(
+        "https://api.xiaomimimo.com/v1/platform/balance",
+        &[
+            ("Authorization", format!("Bearer {key}")),
+            ("Accept", "application/json".into()),
+        ],
+    )
+    .await?;
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        return Err(auth_failed(status));
+    }
+    if !status.is_success() {
+        return Err(format!("HTTP {status}：{}", truncate(&text, 200)));
+    }
+    let body = parse_json(&text)?;
+    parse_mimo_balance(&body).map(|balance_text| QuotaResult {
+        ok: true,
+        plan: None,
+        tiers: vec![],
+        balance_text: Some(balance_text),
+        error: None,
+        ts: 0,
+    })
+}
+
+fn parse_mimo_balance(body: &serde_json::Value) -> Result<String, String> {
+    let parts: Vec<String> = body
+        .get("balance_infos")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|info| {
+            let total = num_field(info, "total_available").filter(|v| v.is_finite())?;
+            let frozen = num_field(info, "frozen_balance")
+                .filter(|v| v.is_finite())
+                .unwrap_or(0.0);
+            let currency = info
+                .get("currency")
+                .and_then(|v| v.as_str())
+                .unwrap_or("CNY");
+            Some(format!("{:.2} {}", total - frozen, currency))
+        })
+        .collect();
+    if parts.is_empty() {
+        return Err("响应中没有余额数据（缺少 total_available）".into());
+    }
+    Ok(format!("小米 MiMo 余额：{}", parts.join("；")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1731,6 +1984,98 @@ mod tests {
         );
         assert_eq!(detect_kind("https://api.novita.ai/v3"), Some(Novita));
         assert_eq!(detect_kind("https://api.moonshot.cn/anthropic"), None);
+        assert_eq!(detect_kind("https://api.stepfun.com/v1"), Some(StepFun));
+        assert_eq!(
+            detect_kind("https://api.siliconflow.com/v1"),
+            Some(SiliconFlowEn)
+        );
+        assert_eq!(
+            detect_kind("https://ark.cn-beijing.volces.com/api/coding"),
+            Some(Volcengine)
+        );
+        assert_eq!(detect_kind("https://zenmux.ai/api/anthropic"), Some(ZenMux));
+
+        // 小米 MiMo：Token Plan 与按量付费是两个域名、两套 Key（cc-switch #9404）
+        assert_eq!(
+            detect_kind("https://token-plan-cn.xiaomimimo.com/anthropic"),
+            Some(MimoTokenPlan)
+        );
+        assert_eq!(
+            detect_kind("https://token-plan-cn.xiaomimimo.com/v1"),
+            Some(MimoTokenPlan)
+        );
+        // Token Plan 地址是另一套 Key，不能拿去查按量余额；反之亦然
+        assert_eq!(
+            detect_kind("https://api.xiaomimimo.com/anthropic"),
+            Some(Mimo)
+        );
+
+        // 域名按边界匹配（cc-switch #9648）：中转站把官方域名写在路径或 query 里、
+        // 仿冒域名、userinfo 里带官方域名，都不算官方供应商——否则会拿中转站的
+        // Key 去打官方额度接口
+        for url in [
+            "https://relay.example.com/open.bigmodel.cn/api/anthropic",
+            "https://relay.example.com/token-plan-cn.xiaomimimo.com/v1",
+            "https://relay.example.com/v1?upstream=https://api.deepseek.com",
+            "https://api.deepseek.com@relay.example.com/anthropic",
+            "https://bigmodel.cn.example.com/api/anthropic",
+            "https://token-plan-cn.xiaomimimo.com.example.com/v1",
+            "https://notopenrouter.ai/api/v1",
+            "https://zenmux-relay.example.com/anthropic",
+        ] {
+            assert_eq!(detect_kind(url), None, "{url}");
+        }
+        // 域名本身与子域名都算；大小写、端口、末尾的点不影响识别
+        assert_eq!(
+            detect_kind("https://bigmodel.cn/api/anthropic"),
+            Some(Zhipu)
+        );
+        assert_eq!(
+            detect_kind("HTTPS://OPEN.BIGMODEL.CN:443/api/anthropic"),
+            Some(Zhipu)
+        );
+        assert_eq!(
+            detect_kind("https://api.deepseek.com./anthropic"),
+            Some(DeepSeek)
+        );
+    }
+
+    #[test]
+    fn test_url_host_and_path() {
+        assert_eq!(
+            url_host("https://open.bigmodel.cn/api/anthropic"),
+            "open.bigmodel.cn"
+        );
+        assert_eq!(
+            url_host("https://API.DeepSeek.com:8443/v1"),
+            "api.deepseek.com"
+        );
+        assert_eq!(
+            url_host("https://user:pw@api.deepseek.com/v1"),
+            "api.deepseek.com"
+        );
+        assert_eq!(
+            url_host("  https://api.deepseek.com./v1  "),
+            "api.deepseek.com"
+        );
+        assert_eq!(url_host("https://[2001:db8::1]:8443/v1"), "2001:db8::1");
+        // 没有 scheme 时按原样取第一段作主机名
+        assert_eq!(url_host("api.deepseek.com/v1"), "api.deepseek.com");
+        // 只有 query 里带 https:// 时不当成 scheme 剥掉
+        assert_eq!(
+            url_host("relay.example.com/v1?u=https://api.deepseek.com"),
+            "relay.example.com"
+        );
+        assert_eq!(url_host(""), "");
+        assert_eq!(url_host("https://"), "");
+        assert_eq!(url_host("https:///api/anthropic"), "");
+
+        assert_eq!(
+            url_path("https://Open.Bigmodel.cn/api/Anthropic?x=1#frag"),
+            "/api/anthropic"
+        );
+        assert_eq!(url_path("https://opencode.ai"), "");
+        assert_eq!(url_path("opencode.ai/zen/go/v1?k=v"), "/zen/go/v1");
     }
 
     #[test]
@@ -1922,6 +2267,148 @@ mod tests {
             detect_kind("https://api.commandcode.ai/provider/v1"),
             Some(CommandCode)
         );
+        assert_eq!(
+            detect_kind("https://api.commandcode.ai/provider/"),
+            Some(CommandCode)
+        );
+        assert_eq!(
+            detect_kind("https://API.CommandCode.ai/provider?x=1"),
+            Some(CommandCode)
+        );
+        assert_eq!(detect_kind("https://commandcode.ai/provider"), None);
+        // 只有 /provider 与 /provider/v1 两个入口，按路径段边界匹配：
+        // /providers、/provider-v2 不算（cc-switch #9518，此前子串匹配会误判）
+        assert_eq!(detect_kind("https://api.commandcode.ai/providers"), None);
+        assert_eq!(detect_kind("https://api.commandcode.ai/providers/v1"), None);
+        assert_eq!(detect_kind("https://api.commandcode.ai/provider-v2"), None);
+    }
+
+    /// 官方文档示例原文（mimo.mi.com/docs/zh-CN/api/asset/credits-get，
+    /// cc-switch 2026-11-03 抄录）。
+    #[test]
+    fn test_mimo_token_plan_parse() {
+        let body = serde_json::json!({
+            "object": "token_plan",
+            "plan_code": "pro",
+            "period": { "start_at": "2026-09-21 23:59:59", "end_at": "2027-09-21 23:59:59" },
+            "quota": {
+                "total_credits": 10000000,
+                "used_credits": 1500000,
+                "remaining_credits": 8500000
+            },
+            "auto_renew": false,
+            "claw_enabled": false
+        });
+        let (tiers, plan) = parse_mimo_token_plan(&body).unwrap();
+        assert_eq!(plan.as_deref(), Some("pro"));
+        assert_eq!(tiers.len(), 1);
+        assert_eq!(tiers[0].name, "本期额度");
+        assert!((tiers[0].utilization - 15.0).abs() < 1e-9);
+        // 周期时间是 UTC 的「YYYY-MM-DD HH:mm:ss」，不是本机时区
+        let end = chrono::NaiveDate::from_ymd_opt(2027, 9, 21)
+            .unwrap()
+            .and_hms_opt(23, 59, 59)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        assert_eq!(tiers[0].resets_at_ts, Some(end));
+        assert_eq!(tiers[0].resets_at, ts_to_local(end));
+
+        // 只给剩余也能算；金额是字符串也认；没有周期时间就不显示重置
+        let (tiers, _) = parse_mimo_token_plan(&serde_json::json!({
+            "quota": { "total_credits": "200", "remaining_credits": "50" }
+        }))
+        .unwrap();
+        assert!((tiers[0].utilization - 75.0).abs() < 1e-9);
+        assert!(tiers[0].resets_at.is_none() && tiers[0].resets_at_ts.is_none());
+
+        // 超用封顶 100%
+        let (tiers, _) = parse_mimo_token_plan(&serde_json::json!({
+            "quota": { "total_credits": 100, "used_credits": 120 }
+        }))
+        .unwrap();
+        assert!((tiers[0].utilization - 100.0).abs() < 1e-9);
+
+        // 重置时间不是 MiMo 写法时走通用解析（ISO 8601）
+        let (tiers, _) = parse_mimo_token_plan(&serde_json::json!({
+            "period": { "end_at": "2027-09-21T23:59:59Z" },
+            "quota": { "total_credits": 10, "used_credits": 1 }
+        }))
+        .unwrap();
+        assert_eq!(tiers[0].resets_at_ts, Some(end));
+
+        // 没有积分额度、字段缺失或非法、带 error：一律报错，不显示成 0%
+        for body in [
+            serde_json::json!({}),
+            serde_json::json!({ "quota": { "total_credits": 0, "used_credits": 0 } }),
+            serde_json::json!({ "quota": { "total_credits": -5, "used_credits": 0 } }),
+            serde_json::json!({ "quota": { "total_credits": 100 } }),
+            serde_json::json!({ "quota": { "total_credits": "inf", "used_credits": 1 } }),
+            serde_json::json!({ "quota": { "total_credits": 100, "used_credits": "inf" } }),
+            serde_json::json!({ "error": { "message": "Invalid API key" } }),
+        ] {
+            assert!(parse_mimo_token_plan(&body).is_err(), "{body}");
+        }
+        let err = parse_mimo_token_plan(&serde_json::json!({
+            "error": { "message": "Invalid API key" }
+        }))
+        .unwrap_err();
+        assert!(err.contains("Invalid API key"), "{err}");
+        // error 为 null 不算错误
+        assert!(parse_mimo_token_plan(&serde_json::json!({
+            "error": null,
+            "quota": { "total_credits": 10, "used_credits": 1 }
+        }))
+        .is_ok());
+    }
+
+    /// 官方文档示例原文（mimo.mi.com/docs/zh-CN/api/asset/balance-get，
+    /// cc-switch 2026-11-03 抄录）。
+    #[test]
+    fn test_mimo_balance_parse() {
+        let text = parse_mimo_balance(&serde_json::json!({
+            "object": "balance",
+            "is_available": true,
+            "balance_infos": [{
+                "currency": "CNY",
+                "cash_balance": "100.50",
+                "gift_balance": "20.00",
+                "frozen_balance": "0.00",
+                "credit_limit": "500.00",
+                "credit_available": "380.00",
+                "total_available": "500.50"
+            }]
+        }))
+        .unwrap();
+        assert_eq!(text, "小米 MiMo 余额：500.50 CNY");
+
+        // 扣掉冻结；余额用完（is_available=false）照常显示 0，不算错误
+        let text = parse_mimo_balance(&serde_json::json!({
+            "is_available": false,
+            "balance_infos": [
+                { "currency": "CNY", "frozen_balance": "12.00", "total_available": "12.00" }
+            ]
+        }))
+        .unwrap();
+        assert_eq!(text, "小米 MiMo 余额：0.00 CNY");
+
+        // 冻结字段缺失按 0；多币种分别列出
+        let text = parse_mimo_balance(&serde_json::json!({ "balance_infos": [
+            { "currency": "CNY", "total_available": "30.25" },
+            { "currency": "USD", "frozen_balance": "0.5", "total_available": 8 }
+        ] }))
+        .unwrap();
+        assert_eq!(text, "小米 MiMo 余额：30.25 CNY；7.50 USD");
+
+        for body in [
+            serde_json::json!({}),
+            serde_json::json!({ "balance_infos": [] }),
+            serde_json::json!({ "balance_infos": [{}] }),
+            serde_json::json!({ "balance_infos": [{ "currency": "CNY", "total_available": "abc" }] }),
+            serde_json::json!({ "balance_infos": [{ "total_available": "inf" }] }),
+        ] {
+            assert!(parse_mimo_balance(&body).is_err(), "{body}");
+        }
     }
 
     fn cc_credits_body(limited: bool, nested: bool) -> serde_json::Value {

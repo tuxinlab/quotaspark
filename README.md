@@ -39,9 +39,9 @@
 - **手动添加供应商**：支持 Anthropic Messages 与 OpenAI Chat Completions 两种接口格式
 - **定时激活**：每个供应商可设多个每日触发时间（HH:MM），可随时启停
 - **多供应商并发激活**：卡片单独"激活"，或托盘 / 顶栏"全部激活"
-- **额度查询（12 家，与 cc-switch 对齐）**：Kimi For Coding、智谱 GLM（个人版/团队版）、
-  MiniMax、ZenMux、OpenCode Go、火山方舟 Agent/Coding Plan；余额类：DeepSeek、
-  StepFun、SiliconFlow、OpenRouter、Novita AI
+- **额度查询（14 家，与 cc-switch 对齐）**：Kimi For Coding、智谱 GLM（个人版/团队版）、
+  MiniMax、ZenMux、OpenCode Go、Command Code、小米 MiMo Token Plan、火山方舟 Agent/Coding Plan；
+  余额类：DeepSeek、StepFun、SiliconFlow、OpenRouter、Novita AI、小米 MiMo
 - **托盘常驻**：关闭窗口 = 隐藏到托盘，调度持续运行；托盘菜单可"立即全部激活"
 - **小功能**：开机自启、深浅主题、调度说明、激活/查询审计日志
 
