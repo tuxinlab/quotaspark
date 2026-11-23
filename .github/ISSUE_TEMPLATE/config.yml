@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: 使用问题 / 疑问
-    url: https://github.com/tuxin-labs/quotaspark/discussions
+    url: https://github.com/tuxinlab/quotaspark/discussions
     about: 不确定是 Bug 的使用问题请到这里讨论（需先在仓库设置中启用 Discussions）
   - name: 安全漏洞
-    url: https://github.com/tuxin-labs/quotaspark/security/advisories/new
+    url: https://github.com/tuxinlab/quotaspark/security/advisories/new
     about: 请勿公开提交安全漏洞，使用私密报告渠道（见 SECURITY.md）

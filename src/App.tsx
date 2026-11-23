@@ -132,7 +132,7 @@ function FlameLogo() {
 
 /* ── 调度模板 ─────────────────────────────────────────────── */
 
-const GITHUB_URL = "https://github.com/tuxin-labs/quotaspark";
+const GITHUB_URL = "https://github.com/tuxinlab/quotaspark";
 
 const TEMPLATES: { name: string; desc: string; times: string[] }[] = [
   {

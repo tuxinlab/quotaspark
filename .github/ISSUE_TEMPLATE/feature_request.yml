@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        提议前请先搜索 [已有 Issue](https://github.com/tuxin-labs/quotaspark/issues?q=is%3Aissue)。
+        提议前请先搜索 [已有 Issue](https://github.com/tuxinlab/quotaspark/issues?q=is%3Aissue)。
         较大的功能建议先描述使用场景，方案细节可以在讨论中完善。
   - type: textarea
     id: scenario

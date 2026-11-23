@@ -33,7 +33,7 @@
 
 ## 执行
 
-如遇滥用、骚扰或其他不可接受的行为，请通过 GitHub 私信或 [Security Advisory](https://github.com/tuxin-labs/quotaspark/security/advisories/new) 联系项目维护者。维护者会审慎审查并作出回应，并承诺对报告者的信息保密。
+如遇滥用、骚扰或其他不可接受的行为，请通过 GitHub 私信或 [Security Advisory](https://github.com/tuxinlab/quotaspark/security/advisories/new) 联系项目维护者。维护者会审慎审查并作出回应，并承诺对报告者的信息保密。
 
 维护者未遵守或未执行本准则时，项目社区其他成员和组织领导者可对其进行永久除名。
 

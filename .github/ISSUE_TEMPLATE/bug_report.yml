@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        感谢反馈！提交前请先搜索 [已有 Issue](https://github.com/tuxin-labs/quotaspark/issues?q=is%3Aissue) 避免重复。
+        感谢反馈！提交前请先搜索 [已有 Issue](https://github.com/tuxinlab/quotaspark/issues?q=is%3Aissue) 避免重复。
         **注意：日志片段里如包含 API Key 请先抹除。**
   - type: dropdown
     id: area
