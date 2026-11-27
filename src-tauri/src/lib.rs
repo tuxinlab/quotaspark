@@ -72,7 +72,11 @@ pub fn run() {
             }
         }))
         // 更新器：下载、验签、启动安装器都由插件完成，安装后由安装器重新打开应用，
-        // 所以这里不注册重启插件（旧版用它做的「重启完成更新」在 Windows 上走不到）
+        // 所以这里不注册重启插件（旧版用它做的「重启完成更新」在 Windows 上走不到）。
+        // 「刚更新完」标记由前端在开始下载前经 mark_just_updated 写入（插件的
+        // on_before_exit 钩子挂在 Rust 侧手动构建的 UpdaterBuilder 上，JS API 的
+        // 官方下载流程够不到）——开机自启实例带着 --minimized 参数，更新器重启
+        // 时会原样回传，没有这个标记手动更新后就静默缩进托盘了。
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -93,6 +97,7 @@ pub fn run() {
             commands::query_quota,
             commands::get_autostart,
             commands::set_autostart,
+            commands::mark_just_updated,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -151,8 +156,18 @@ pub fn run() {
             }
 
             // 窗口默认隐藏（tauri.conf.json visible:false），手动打开（无
-            // --minimized 参数）时显示；开机自启拉起则保持静默进托盘
-            if !std::env::args().any(|a| a == "--minimized") {
+            // --minimized 参数）时显示；开机自启拉起则保持静默进托盘。
+            // 例外：更新器重启回传了 --minimized，但安装器启动前写过
+            // just-updated 标记——用户刚手动完成更新，理应看到新界面。
+            let just_updated = store::data_dir().join("just-updated");
+            let updated_this_boot = just_updated.exists();
+            if updated_this_boot {
+                let _ = std::fs::remove_file(&just_updated);
+            }
+            if should_show_window(
+                std::env::args().any(|a| a == "--minimized"),
+                updated_this_boot,
+            ) {
                 if let Some(w) = app.get_webview_window("main") {
                     let _ = w.show();
                     let _ = w.set_focus();
@@ -195,4 +210,28 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// 启动时是否显示主窗口。
+///
+/// `--minimized` = 静默进托盘（开机自启的注册参数）；但更新器重启会把原进程的
+/// 参数原样回传，手动更新完成后也会带着它——`just_updated` 标记存在（安装器
+/// 启动前写入）说明这次不是开机自启，应显示主窗口让用户看到更新结果。
+fn should_show_window(start_minimized: bool, just_updated: bool) -> bool {
+    !start_minimized || just_updated
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_show_window;
+
+    #[test]
+    fn test_should_show_window() {
+        // 手动打开 / 更新后重启：显示
+        assert!(should_show_window(false, false));
+        assert!(should_show_window(false, true));
+        assert!(should_show_window(true, true));
+        // 开机自启：静默
+        assert!(!should_show_window(true, false));
+    }
 }

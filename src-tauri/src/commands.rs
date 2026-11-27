@@ -367,6 +367,15 @@ pub fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
     }
 }
 
+/// 写「刚更新完」标记：前端开始下载更新前调用。更新器重启会原样回传启动参数
+/// （开机自启实例带 --minimized），启动逻辑看到这个标记就无视它、显示主窗口
+/// （lib.rs 的 setup 读取后即删，见 should_show_window）。
+#[tauri::command]
+pub fn mark_just_updated() -> Result<(), String> {
+    let path = crate::store::data_dir().join("just-updated");
+    std::fs::write(&path, "").map_err(|e| format!("写入更新标记失败：{e}"))
+}
+
 /// 立即激活：传 id 激活单个，不传激活全部。
 #[tauri::command]
 pub async fn activate_now(

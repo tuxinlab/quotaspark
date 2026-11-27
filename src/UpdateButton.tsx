@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { check, type Update } from "@tauri-apps/plugin-updater";
+import { api } from "./api";
 
 /** 常驻期间的复查间隔。应用开机自启、长期留在托盘里，只在启动时查一次的话，
  *  不重启就收不到新版本提示。 */
@@ -107,6 +108,9 @@ export default function UpdateButton({ onNotice }: { onNotice: (msg: string) => 
     let total = 0;
     let received = 0;
     try {
+      // 先写「刚更新完」标记：安装器重启应用时会原样回传当前启动参数，
+      // 开机自启实例带着 --minimized，没有标记的话更新后就静默缩进托盘
+      await api.markJustUpdated().catch(() => {});
       await u.downloadAndInstall((event) => {
         switch (event.event) {
           case "Started":

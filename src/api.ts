@@ -75,5 +75,7 @@ export const api = {
   queryQuota: (id: string) => invoke<void>("query_quota", { id }),
   getAutostart: () => invoke<boolean>("get_autostart"),
   setAutostart: (enabled: boolean) => invoke<void>("set_autostart", { enabled }),
+  /** 下载更新前调用：写「刚更新完」标记，更新重启后即使带 --minimized 也显示主窗口 */
+  markJustUpdated: () => invoke<void>("mark_just_updated"),
   onChanged: (cb: () => void) => listen("state-changed", cb),
 };
