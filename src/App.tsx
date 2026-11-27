@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, type LogEntry, type ProviderCard, type ProviderConfig, type SyncReport, type QuotaTier } from "./api";
 import ProviderForm, { QUOTA_SUPPORTED_HINT } from "./ProviderForm";
 import UpdateButton from "./UpdateButton";
@@ -121,6 +122,80 @@ function FlameLogo() {
         opacity="0.22"
       />
     </svg>
+  );
+}
+
+/* ── 自绘标题栏：窗口已去掉系统边框，标题与窗口按钮由前端画 ──────── */
+
+const MinimizeIcon = () => (
+  <svg width="11" height="11" viewBox="0 0 11 11" aria-hidden>
+    <path d="M1 5.5h9" stroke="currentColor" strokeWidth="1" />
+  </svg>
+);
+
+const MaximizeIcon = () => (
+  <svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" strokeWidth="1" aria-hidden>
+    <rect x="1" y="1" width="9" height="9" rx="1" />
+  </svg>
+);
+
+const RestoreIcon = () => (
+  <svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" strokeWidth="1" aria-hidden>
+    <rect x="0.5" y="2.5" width="8" height="8" rx="1" />
+    <path d="M2.5 2.5v-1a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-1" />
+  </svg>
+);
+
+const CloseIcon = () => (
+  <svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" strokeWidth="1" aria-hidden>
+    <path d="M1 1l9 9M10 1l-9 9" />
+  </svg>
+);
+
+function WinControls() {
+  const [maximized, setMaximized] = useState(false);
+
+  // 非 Tauri 环境（纯浏览器调试）下没有窗口对象，按钮就不响应
+  const win = (() => {
+    try {
+      return getCurrentWindow();
+    } catch {
+      return null;
+    }
+  })();
+
+  const sync = () => win?.isMaximized().then(setMaximized).catch(() => {});
+  useEffect(() => {
+    sync();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (!win) return null;
+
+  const toggle = () => win.toggleMaximize().then(sync).catch(() => {});
+
+  return (
+    <div className="win-controls">
+      <button className="win-btn" title="最小化" aria-label="最小化" onClick={() => win.minimize()}>
+        <MinimizeIcon />
+      </button>
+      <button
+        className="win-btn"
+        title={maximized ? "向下还原" : "最大化"}
+        aria-label="最大化"
+        onClick={toggle}
+      >
+        {maximized ? <RestoreIcon /> : <MaximizeIcon />}
+      </button>
+      <button
+        className="win-btn close"
+        title="关闭（收起到托盘）"
+        aria-label="关闭"
+        onClick={() => win.close()}
+      >
+        <CloseIcon />
+      </button>
+    </div>
   );
 }
 
@@ -441,16 +516,21 @@ export default function App() {
 
   return (
     <div className="app">
-      <div className="topbar">
-        <div className="brand">
+      <div className="titlebar">
+        <div className="brand" data-tauri-drag-region>
           <FlameLogo />
-          <div className="brand-text">
-            <h1>
-              额度火花 <span className="en">QuotaSpark</span>
-            </h1>
-            <p className="subtitle">定时点燃 Coding Plan 的五小时额度窗口</p>
-          </div>
+          <h1 data-tauri-drag-region>
+            额度火花 <span className="en">QuotaSpark</span>
+          </h1>
         </div>
+        <div className="titlebar-drag" data-tauri-drag-region />
+        <WinControls />
+      </div>
+
+      <div className="toolbar">
+        <span className="subtitle" data-tauri-drag-region>
+          定时点燃 Coding Plan 的五小时额度窗口
+        </span>
         <div className="topbar-actions">
           <button
             className="icon-btn"

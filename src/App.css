@@ -26,6 +26,8 @@
   --text: #e6e6e3;
   --muted: #8b8d94;
   --faint: #62656c;
+  /* 窗口控制按钮：比正文次要，但要比 --muted 清晰，否则像没画出来 */
+  --caption: #9fa2a9;
 
   /* 强调与语义 */
   --accent: #e8933c;
@@ -67,6 +69,7 @@
   --text: #1a1a18;
   --muted: #6f7178;
   --faint: #9a9ca3;
+  --caption: #55575d;
 
   --accent: #a8620f;
   --accent-soft: rgba(168, 98, 15, 0.1);
@@ -226,19 +229,77 @@ button.danger-solid:hover:not(:disabled) {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 18px 22px 0;
-  gap: 14px;
+  width: 100%;
+  padding: 0 22px;
+  gap: 0;
 }
 
-/* ── 顶栏 ──────────────────────────────────────────────── */
+/* ── 自绘标题栏（窗口无系统边框） ───────────────────────── */
 
-.topbar {
+/* ── 自绘标题栏：只放品牌 + 窗口按钮，像原生 caption 栏 ──── */
+
+.titlebar {
+  position: relative;
   display: flex;
+  align-items: center;
+  gap: 10px;
+  /* 出血到窗口左右边缘，窗口按钮才能贴边；右侧预留按钮列的宽度 */
+  margin: 0 -22px;
+  padding: 8px 138px 8px 22px;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.titlebar-drag {
+  flex: 1 1 0;
+  align-self: stretch;
+  min-width: 8px;
+}
+
+/* 窗口按钮绝对定位在右上角 */
+.win-controls {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+}
+
+.win-btn {
+  width: 46px;
+  height: 100%;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--caption);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.win-btn:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+  border-color: transparent;
+}
+
+.win-btn.close:hover:not(:disabled) {
+  background: #c42b1c;
+  color: #fff;
+  border-color: transparent;
+}
+
+/* ── 工具栏：标语在左，操作按钮从右边排 ────────────────── */
+
+.toolbar {
+  display: flex;
+  align-items: center;
   justify-content: space-between;
-  align-items: flex-start;
-  gap: 16px;
+  gap: 12px;
+  padding: 2px 0 12px;
+  flex-shrink: 0;
+  user-select: none;
 }
 
 .brand {
@@ -246,10 +307,6 @@ button.danger-solid:hover:not(:disabled) {
   align-items: center;
   gap: 10px;
   flex-shrink: 0;
-}
-
-.brand-text {
-  min-width: 0;
 }
 
 .brand .mark {
@@ -264,7 +321,7 @@ button.danger-solid:hover:not(:disabled) {
   font-size: 15px;
   font-weight: 650;
   letter-spacing: -0.01em;
-  line-height: 1.25;
+  line-height: 1;
   display: flex;
   align-items: baseline;
   gap: 7px;
@@ -281,20 +338,30 @@ button.danger-solid:hover:not(:disabled) {
   color: var(--faint);
 }
 
+/* 标题与副标题之间的竖分隔线 */
+.brand-div {
+  width: 1px;
+  height: 13px;
+  background: var(--line-strong);
+  flex-shrink: 0;
+}
+
 .subtitle {
-  margin: 1px 0 0;
   color: var(--muted);
   font-size: 11.5px;
-  line-height: 1.3;
+  line-height: 1;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .topbar-actions {
   display: flex;
-  gap: 6px;
+  gap: 5px;
   align-items: center;
   flex-wrap: wrap;
-  justify-content: flex-end;
+  justify-content: flex-start;
   flex-shrink: 0;
 }
 
@@ -310,6 +377,8 @@ button.danger-solid:hover:not(:disabled) {
   padding: 8px 13px;
   font-size: 12.5px;
   color: var(--text);
+  margin-bottom: 12px;
+  flex-shrink: 0;
 }
 
 /* ── 卡片区 ──────────────────────────────────────────── */
@@ -836,7 +905,8 @@ button.danger-solid:hover:not(:disabled) {
   height: 176px;
   display: flex;
   flex-direction: column;
-  margin: 0 0 16px;
+  margin: 12px 0 16px;
+  flex-shrink: 0;
 }
 
 .logs h3 {
