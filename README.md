@@ -12,13 +12,16 @@
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2B-blue)
 ![Built with Tauri 2](https://img.shields.io/badge/built%20with-Tauri%202-orange)
 
-![界面预览](docs/screenshot-dark.png)
+<p align="center">
+  <img src="docs/screenshot-dark.png" width="49.5%" alt="深色主题" />
+  <img src="docs/screenshot-light.png" width="49.5%" alt="浅色主题" />
+</p>
 
 ## 下载安装
 
 从 [Releases](https://github.com/tuxinlab/quotaspark/releases/latest) 下载
-`QuotaSpark_x.y.z_x64-setup.exe` 双击安装（Windows 10+）。已安装的用户通过顶栏
-「检查更新」一键升级。
+`QuotaSpark_x.y.z_x64-setup.exe` 双击安装（Windows 10+）。已安装的用户可通过顶栏
+「检查更新」一键升级，应用常驻期间每 6 小时自动检查一次新版本。
 
 ## 快速上手
 
