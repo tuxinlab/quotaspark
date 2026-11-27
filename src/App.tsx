@@ -110,16 +110,10 @@ const GitHubIcon = () => (
 
 function FlameLogo() {
   return (
-    <svg width="34" height="34" viewBox="0 0 24 24" fill="none" aria-hidden>
-      <defs>
-        <linearGradient id="qs-flame" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor="#5b8cff" />
-          <stop offset="100%" stopColor="#7c5bff" />
-        </linearGradient>
-      </defs>
+    <svg className="mark" viewBox="0 0 24 24" fill="none" aria-hidden>
       <path
         d="M12.2 2c.4 3.4-.9 5.2-2.6 7C7.9 10.8 6 12.8 6 15.7a6 6 0 0 0 12 0c0-2.3-1-4.1-2.3-5.7-.6 1.1-1.4 1.9-2.4 2.3.4-3.5-.2-7-1.1-10.3z"
-        fill="url(#qs-flame)"
+        fill="currentColor"
       />
       <path
         d="M12 21.8a3.4 3.4 0 0 1-3.4-3.4c0-1.7 1.2-2.9 2.3-4 .5.9 1.3 1.5 2.2 1.7-.2 1.9.4 3 1.9 3.9-.5 1.1-1.6 1.8-3 1.8z"
@@ -450,8 +444,10 @@ export default function App() {
       <div className="topbar">
         <div className="brand">
           <FlameLogo />
-          <div>
-            <h1>额度火花 <span className="en">QuotaSpark</span></h1>
+          <div className="brand-text">
+            <h1>
+              额度火花 <span className="en">QuotaSpark</span>
+            </h1>
             <p className="subtitle">定时点燃 Coding Plan 的五小时额度窗口</p>
           </div>
         </div>
@@ -547,15 +543,20 @@ export default function App() {
                 <div className="card-title-wrap">
                   <div className="card-title">
                     {p.name}
-                    {p.cc_provider_id && <span className="badge cc">cc</span>}
                     <span className="badge format">{p.format === "openai" ? "OpenAI" : "Anthropic"}</span>
-                    {p.enabled && <span className="badge on">定时中</span>}
+                    {p.cc_provider_id && <span className="badge cc">cc</span>}
                   </div>
                   <div className="card-sub">
                     {p.model} · {p.base_url}
                   </div>
                 </div>
               </div>
+              {p.enabled && (
+                <span className="badge on">
+                  <i className="dot" />
+                  定时中
+                </span>
+              )}
             </div>
 
             <div className="quota" data-testid="quota-panel">
@@ -588,7 +589,12 @@ export default function App() {
               ) : p.quota ? (
                 <div className="quota-err">
                   {p.quota.error}
-                  <button disabled={!!querying[p.id]} onClick={() => runQuotaQuery(p.id)}>
+                  <button
+                    className="quota-refresh"
+                    data-testid="quota-refresh"
+                    disabled={!!querying[p.id]}
+                    onClick={() => runQuotaQuery(p.id)}
+                  >
                     {querying[p.id] ? "查询中…" : "重试"}
                   </button>
                 </div>
@@ -609,23 +615,38 @@ export default function App() {
             <SchedRow p={p} onChanged={refresh} />
 
             <div className="card-foot">
-              <span className="actions">
+              {p.last && (
+                <div className={"last " + (p.last.ok ? "ok" : "fail")}>
+                  <i className="dot" />
+                  <span>
+                    {fmtTime(p.last.ts)} {p.last.detail}
+                  </span>
+                </div>
+              )}
+              <div className="actions">
                 <button className="primary" data-testid="activate-btn" onClick={() => api.activateNow(p.id)}>激活</button>
-                <button data-testid="edit-btn" onClick={() => setEditing(p)}>编辑</button>
-                <button className="danger" data-testid="delete-btn" onClick={() => setConfirmDel(p)}>删除</button>
-              </span>
-            </div>
-
-            {p.last && (
-              <div className={"last " + (p.last.ok ? "ok" : "fail")}>
-                {fmtTime(p.last.ts)} {p.last.detail}
+                <button className="ghost" data-testid="edit-btn" onClick={() => setEditing(p)}>编辑</button>
+                <button className="ghost danger" data-testid="delete-btn" onClick={() => setConfirmDel(p)}>删除</button>
               </div>
-            )}
+            </div>
           </div>
         ))}
         {!providers.length && (
           <div className="empty">
-            还没有供应商。点击右上角「同步 cc-switch 配置」一键导入，或「＋ 手动添加」。
+            <svg className="empty-mark" width="30" height="30" viewBox="0 0 24 24" fill="none" aria-hidden>
+              <path
+                d="M12.2 2c.4 3.4-.9 5.2-2.6 7C7.9 10.8 6 12.8 6 15.7a6 6 0 0 0 12 0c0-2.3-1-4.1-2.3-5.7-.6 1.1-1.4 1.9-2.4 2.3.4-3.5-.2-7-1.1-10.3z"
+                fill="currentColor"
+              />
+            </svg>
+            <div className="empty-title">还没有供应商</div>
+            <div className="empty-sub">
+              从 cc-switch 一键导入已有的 Coding Plan 配置，或手动添加一个供应商。
+            </div>
+            <div className="empty-actions">
+              <button className="primary" onClick={onSync}>同步 cc-switch 配置</button>
+              <button onClick={() => setEditing(null)}>＋ 手动添加</button>
+            </div>
           </div>
         )}
       </div>

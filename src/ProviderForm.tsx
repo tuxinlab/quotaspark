@@ -187,15 +187,15 @@ export default function ProviderForm({ initial, onClose, onSaved }: Props) {
 
         {err && <div className="form-err">{err}</div>}
 
-        <div className="form-actions">
-          <button className="primary" onClick={save}>保存</button>
-          <button onClick={onClose}>取消</button>
-        </div>
-
         <p className="hint">
           激活 = 向该供应商发送一条 max_tokens=1 的最小请求（内容 "hi"），HTTP 2xx
           即开始计算五小时窗口。Key 仅保存在本机 ~/.cc-activator/config.json，不会上传。
         </p>
+
+        <div className="form-actions">
+          <button onClick={onClose}>取消</button>
+          <button className="primary" onClick={save}>保存</button>
+        </div>
       </div>
     </div>
   );
