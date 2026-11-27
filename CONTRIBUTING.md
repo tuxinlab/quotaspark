@@ -77,7 +77,8 @@ src/                  # React 前端（App.tsx 顶栏与卡片，ProviderForm �
 src-tauri/src/
   commands.rs         # Tauri 命令层（前端 invoke 的入口，保持薄）
   engine.rs           # 激活引擎（最小请求点燃窗口）
-  quota.rs            # 14 家供应商的额度/余额查询
+  quota.rs            # 15 家供应商的额度/余额查询
+  net_err.rs          # 网络错误分类与提示文案
   scheduler.rs        # 定时调度（30s tick + 去重）
   cc_sync.rs          # cc-switch 数据库只读同步
   store.rs / state.rs # 配置持久化与全局状态

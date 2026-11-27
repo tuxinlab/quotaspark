@@ -33,7 +33,8 @@ cd src-tauri && cargo fmt && cargo clippy -- -D warnings   # 须零警告
 - `src-tauri/src/`：
   - `commands.rs` — Tauri 命令层（前端 invoke 入口），保持薄，业务逻辑放对应模块
   - `engine.rs` — 激活引擎；模型名会剥掉 cc-switch 的 `[1M]` 后缀
-  - `quota.rs` — 14 家供应商额度/余额查询（端点与解析移植自 cc-switch，含 Command Code 与小米 MiMo；识别按域名边界匹配）
+  - `quota.rs` — 15 家供应商额度/余额查询（端点与解析移植自 cc-switch，含 Command Code、小米 MiMo、Ollama Cloud；识别按域名边界匹配）
+  - `net_err.rs` — 网络错误分类（防火墙 / 拒连 / 超时 / DNS / TLS）与文案，错误里去掉 URL
   - `scheduler.rs` — 30s tick 调度 + 触发去重（去重键持久化在配置，重启不重发）
   - `cc_sync.rs` — 同步 `~/.cc-switch/cc-switch.db`
   - `store.rs` / `state.rs` — `~/.cc-activator/config.json` 持久化（原子写入）与全局状态
@@ -58,9 +59,9 @@ cd src-tauri && cargo fmt && cargo clippy -- -D warnings   # 须零警告
   dev 调试前先清旧实例：`taskkill //IM cc-activator.exe //F`
 - **Vite 监听已改轮询**（vite.config.ts `usePolling: true`）：若前端改动"没生效"，
   多半是 dev 实例太旧（改 Rust 会重启应用但不会重启前端缓存之外的问题），重启 dev 即可
-- **卡片有 hover transform**：卡片内 `position: fixed` 元素的包含块会被 transform 劫持——
-  弹层/浮窗**不要用 fixed 全屏遮罩**做点外关闭，用 document 级 mousedown 监听
-  （SchedRow 的既定写法）
+- **卡片不做 hover transform**（视觉改版后已去掉）：卡片内 `position: fixed` 元素的包含块会被
+  transform 劫持——弹层/浮窗**不要用 fixed 全屏遮罩**做点外关闭，用 document 级 mousedown 监听
+  （SchedRow 的既定写法）。别再给卡片加 transform，否则这个坑会回来
 - **e2e 的 chips/时间断言按内容定位**：chips 排序显示，且用户自己的卡片也有 chips，
   必须用 `testChips(page)` + `filter({ hasText })`，不要按位置取
 - **改版本号后 Cargo.lock 会跟着变**（build 时），记得一并提交

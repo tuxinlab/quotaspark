@@ -300,13 +300,37 @@ async function pollUntil(fn, desc, timeoutMs = 3000) {
   throw new Error(`${desc}（最后值：${JSON.stringify(last?.value)}）`);
 }
 
+/** 失败时的现场取证：当前有哪些卡、测试卡的 chips 是什么状态 */
+async function dumpState() {
+  const cards = await page.evaluate(() =>
+    [...document.querySelectorAll('[data-testid="provider-card"]')].map(el => el.dataset.name),
+  );
+  const chips = await page.evaluate(() => {
+    const card = document.querySelector(
+      '[data-testid="provider-card"][data-name="测试-勿动E2E"]',
+    );
+    if (!card) return "（测试卡不在 DOM 里）";
+    const row = card.querySelector('[data-testid="time-chips"]');
+    if (!row) return "（测试卡没有 time-chips 行）";
+    return {
+      chips: [...row.querySelectorAll(".chip")].map(c => c.textContent.trim()),
+      inputs: row.querySelectorAll("input").length,
+      html: row.innerHTML.slice(0, 400),
+    };
+  });
+  return { cards, chips };
+}
+
 await step("【调度】修改 01:30 → 06:00（键盘真实键入，改后排序正确）", async () => {
   // chips 排序显示，01:30 排在第一位；定位要按内容而非位置
-  await testChips(page)
+  const target = testChips(page)
     .filter({ hasText: "01:30" })
     .first()
-    .locator(".chip-time")
-    .click();
+    .locator(".chip-time");
+  if (!(await target.count())) {
+    throw new Error(`找不到 01:30 的 chip，现场：${JSON.stringify(await dumpState())}`);
+  }
+  await target.click();
   const input = page.getByTestId("time-input");
   await input.pressSequentially("0600");
   await input.press("Enter");

@@ -3,6 +3,7 @@
 //! 只会被算进旧窗口（HTTP 200 但不点亮新窗口），定时触发据此推迟发送
 //! （scheduler::scheduled_delay_ms）。额度查询在 quota.rs。
 
+use crate::net_err;
 use crate::store::ProviderConfig;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -107,7 +108,7 @@ pub async fn activate(p: &ProviderConfig) -> Result<String, String> {
     };
 
     let started = std::time::Instant::now();
-    let resp = req.send().await.map_err(|e| format!("请求失败：{e}"))?;
+    let resp = req.send().await.map_err(net_err::describe)?;
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
     let ms = started.elapsed().as_millis();

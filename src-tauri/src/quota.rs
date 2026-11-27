@@ -19,6 +19,7 @@
 //! OAuth token 刷新链路，本工具不搬移。
 
 use crate::engine::{client, truncate};
+use crate::net_err;
 use crate::store::ProviderConfig;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -74,6 +75,8 @@ pub enum Kind {
     MimoTokenPlan,
     /// 小米 MiMo 按量付费（`api.xiaomimimo.com`，`sk-` Key）
     Mimo,
+    /// Ollama Cloud（`ollama.com`，订阅含额度积分）
+    OllamaCloud,
 }
 
 /// 剥掉合法的 scheme（字母开头，仅含字母数字与 `+` `-` `.`），其余原样返回。
@@ -159,6 +162,9 @@ pub fn detect_kind(base_url: &str) -> Option<Kind> {
         Some(Kind::Volcengine)
     } else if host_is(base_url, &["token-plan-cn.xiaomimimo.com"]) {
         Some(Kind::MimoTokenPlan)
+    } else if host_is(base_url, &["ollama.com"]) {
+        // 本机 Ollama（localhost:11434）主机名不匹配，不会命中
+        Some(Kind::OllamaCloud)
     }
     // 按量余额
     else if host_is(base_url, &["api.deepseek.com"]) {
@@ -195,6 +201,7 @@ pub fn detect_label(kind: Kind) -> &'static str {
         Kind::OpenRouter => "OpenRouter（按量）",
         Kind::Novita => "Novita AI（按量）",
         Kind::MimoTokenPlan => "小米 MiMo Token Plan",
+        Kind::OllamaCloud => "Ollama Cloud",
         Kind::Mimo => "小米 MiMo（按量）",
     }
 }
@@ -238,6 +245,7 @@ async fn dispatch(p: &ProviderConfig) -> Result<QuotaResult, String> {
         Kind::OpencodeGo => opencode_go(p).await,
         Kind::CommandCode => command_code(p).await,
         Kind::MimoTokenPlan => mimo_token_plan(p).await,
+        Kind::OllamaCloud => ollama_cloud(p).await,
         Kind::Volcengine => volcengine(p).await,
         Kind::DeepSeek => deepseek(p).await,
         Kind::StepFun => stepfun(p).await,
@@ -266,7 +274,7 @@ async fn http_get(
     for (k, v) in headers {
         req = req.header(*k, v.as_str());
     }
-    let resp = req.send().await.map_err(|e| format!("请求失败：{e}"))?;
+    let resp = req.send().await.map_err(net_err::describe)?;
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
     Ok((status, text))
@@ -1218,6 +1226,109 @@ async fn mimo_token_plan(p: &ProviderConfig) -> Result<QuotaResult, String> {
     Ok(QuotaResult {
         ok: true,
         plan,
+        tiers,
+        balance_text: None,
+        error: None,
+        ts: 0,
+    })
+}
+
+// ── Ollama Cloud ────────────────────────────────────────────
+// GET https://ollama.com/api/balance（Bearer，用卡片的 API Key）
+// 官方文档：docs.ollama.com/api/balance。两种套餐结构：
+// - 现行：included.balance_usd（本期剩余）/ included.allowance_usd（本期总额），
+//   折成一档「本月额度」，重置时间取 included.period.until
+// - 旧版：included.session / included.weekly 各带 remaining_percent（0-100 剩余）
+//   与 resets_at，分别对应「五小时窗口」与「本周额度」
+// 另购余额（purchased.balance_usd）不算套餐额度，不进档位。
+// （移植自 cc-switch #9382）
+
+/// 解析 Ollama Cloud 余额响应。返回空数组表示这个账号没有可展示的套餐额度。
+fn parse_ollama_cloud_tiers(body: &serde_json::Value) -> Vec<QuotaTier> {
+    let Some(included) = body.get("included") else {
+        return Vec::new();
+    };
+    // 现行套餐：本期额度折成「本月额度」
+    let balance = included.get("balance_usd").and_then(num);
+    let allowance = included.get("allowance_usd").and_then(num);
+    if let (Some(balance), Some(allowance)) = (balance, allowance) {
+        if allowance.is_finite() && allowance > 0.0 && balance.is_finite() {
+            let used = (allowance - balance).clamp(0.0, allowance);
+            let (resets_at, resets_at_ts) = included
+                .get("period")
+                .and_then(|period| period.get("until"))
+                .map(|v| (reset_display(v), reset_ts(v)))
+                .unwrap_or((None, None));
+            return vec![QuotaTier {
+                name: "本月额度".into(),
+                utilization: used / allowance * 100.0,
+                resets_at,
+                resets_at_ts,
+                amount: Some(format!("{:.2} / {:.2} USD", allowance - balance, allowance)),
+            }];
+        }
+    }
+    // 旧版套餐：五小时窗口 + 本周额度
+    let mut tiers = Vec::new();
+    for (key, name) in [("session", "五小时窗口"), ("weekly", "本周额度")] {
+        let Some(window) = included.get(key) else {
+            continue;
+        };
+        let Some(remaining) = window.get("remaining_percent").and_then(num) else {
+            continue;
+        };
+        if !remaining.is_finite() {
+            continue;
+        }
+        tiers.push(QuotaTier {
+            name: name.into(),
+            utilization: (100.0 - remaining).clamp(0.0, 100.0),
+            resets_at: window.get("resets_at").and_then(reset_display),
+            resets_at_ts: window.get("resets_at").and_then(reset_ts),
+            amount: None,
+        });
+    }
+    tiers
+}
+
+async fn ollama_cloud(p: &ProviderConfig) -> Result<QuotaResult, String> {
+    let key = require_key(p)?;
+    let (status, text) = http_get(
+        "https://ollama.com/api/balance",
+        &[
+            ("Authorization", format!("Bearer {key}")),
+            ("Accept", "application/json".into()),
+        ],
+    )
+    .await?;
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return Err("Key 无效或已过期（HTTP 401）".into());
+    }
+    // 403：账号被封禁
+    if status == reqwest::StatusCode::FORBIDDEN {
+        return Err("账号已被停用（HTTP 403）".into());
+    }
+    if !status.is_success() {
+        return Err(format!("HTTP {status}：{}", truncate(&text, 200)));
+    }
+    let body = parse_json(&text)?;
+    let tiers = parse_ollama_cloud_tiers(&body);
+    if tiers.is_empty() {
+        // allowance 为 0 是按量付费账号，没有套餐额度可显示
+        let payg = body
+            .get("included")
+            .and_then(|i| i.get("allowance_usd"))
+            .and_then(num)
+            .is_some_and(|v| v == 0.0);
+        return Err(if payg {
+            "该账号是按量付费，没有包含在订阅里的额度".into()
+        } else {
+            "该账号没有可显示的套餐额度".into()
+        });
+    }
+    Ok(QuotaResult {
+        ok: true,
+        plan: None,
         tiers,
         balance_text: None,
         error: None,
@@ -2658,5 +2769,68 @@ mod tests {
             &serde_json::json!({ "balance_infos": [{ "currency": "CNY" }] })
         )
         .is_err());
+    }
+
+    #[test]
+    fn test_detect_ollama_cloud() {
+        use Kind::*;
+        for url in [
+            "https://ollama.com",
+            "https://ollama.com/v1",
+            "https://OLLAMA.com/",
+        ] {
+            assert_eq!(detect_kind(url), Some(OllamaCloud), "{url}");
+        }
+        // 本机 Ollama 没有套餐；仿冒域名不算
+        assert_eq!(detect_kind("http://localhost:11434"), None);
+        assert_eq!(detect_kind("http://127.0.0.1:11434/v1"), None);
+        assert_eq!(detect_kind("https://ollama.com.example.com/v1"), None);
+    }
+
+    /// 官方文档示例结构（docs.ollama.com/api/balance，移植自 cc-switch #9382）
+    #[test]
+    fn test_ollama_cloud_current_plan() {
+        let tiers = parse_ollama_cloud_tiers(&serde_json::json!({
+            "included": {
+                "balance_usd": 72.5,
+                "allowance_usd": 100,
+                "period": { "from": "2026-11-01T00:00:00Z", "until": "2026-12-01T00:00:00Z" }
+            },
+            "purchased": { "balance_usd": 25 }
+        }));
+        assert_eq!(tiers.len(), 1);
+        assert_eq!(tiers[0].name, "本月额度");
+        assert!((tiers[0].utilization - 27.5).abs() < 1e-9);
+        assert!(tiers[0].resets_at.is_some() && tiers[0].resets_at_ts.is_some());
+        // 另购余额不进档位
+        assert!(tiers[0]
+            .amount
+            .as_deref()
+            .unwrap()
+            .contains("27.50 / 100.00"));
+    }
+
+    #[test]
+    fn test_ollama_cloud_legacy_plan() {
+        let tiers = parse_ollama_cloud_tiers(&serde_json::json!({
+            "included": {
+                "session": { "remaining_percent": 80, "resets_at": "2026-11-10T13:00:00Z" },
+                "weekly": { "remaining_percent": 35.5, "resets_at": "2026-11-14T00:00:00Z" }
+            }
+        }));
+        assert_eq!(tiers.len(), 2);
+        assert_eq!(tiers[0].name, "五小时窗口");
+        assert!((tiers[0].utilization - 20.0).abs() < 1e-9);
+        assert_eq!(tiers[1].name, "本周额度");
+        assert!((tiers[1].utilization - 64.5).abs() < 1e-9);
+        assert!(tiers[1].resets_at.is_some());
+
+        // 没有可展示的额度：空
+        assert!(parse_ollama_cloud_tiers(&serde_json::json!({})).is_empty());
+        // 按量付费：allowance 为 0，不折成档位
+        assert!(parse_ollama_cloud_tiers(&serde_json::json!({
+            "included": { "balance_usd": 0, "allowance_usd": 0 }
+        }))
+        .is_empty());
     }
 }
